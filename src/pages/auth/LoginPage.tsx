@@ -5,7 +5,8 @@ import { BookOpen, Mail, Lock, Eye, EyeOff, Sparkles } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { supabase } from '@/lib/supabase'
+import { signInWithEmailAndPassword } from 'firebase/auth'
+import { auth, IS_MOCK_MODE } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/useToast'
@@ -29,21 +30,22 @@ export function LoginPage() {
   const onSubmit = async (data: LoginForm) => {
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: data.email,
-        password: data.password,
-      })
-      if (error) throw error
+      if (IS_MOCK_MODE) {
+        // Mock login
+        const users = JSON.parse(localStorage.getItem('mock_supabase_users') || '[]')
+        const user = users.find((u: any) => u.email === data.email && u.password === data.password)
+        if (!user) throw new Error('Invalid email or password')
+        const session = { user, access_token: 'mock-token' }
+        localStorage.setItem('mock_supabase_session', JSON.stringify(session))
+        navigate('/dashboard')
+        return
+      }
+      await signInWithEmailAndPassword(auth, data.email, data.password)
       navigate('/dashboard')
     } catch (error: any) {
-      // Give a friendlier message for the "Email not confirmed" error
       const msg = error.message || 'Login failed'
-      if (msg.toLowerCase().includes('email not confirmed')) {
-        toast({
-          title: 'Email not confirmed',
-          description: 'Please check your inbox (and spam folder) for the verification link, or try signing up again.',
-          variant: 'error',
-        })
+      if (msg.includes('user-not-found') || msg.includes('wrong-password') || msg.includes('invalid-credential')) {
+        toast({ title: 'Invalid email or password', variant: 'error' })
       } else {
         toast({ title: msg, variant: 'error' })
       }

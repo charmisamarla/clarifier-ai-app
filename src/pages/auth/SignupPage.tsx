@@ -5,7 +5,8 @@ import { BookOpen, Mail, Lock, Eye, EyeOff, User, Sparkles } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { supabase } from '@/lib/supabase'
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
+import { auth, IS_MOCK_MODE } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/useToast'
@@ -35,23 +36,40 @@ export function SignupPage() {
   const onSubmit = async (data: SignupForm) => {
     setLoading(true)
     try {
-      const { data: authData, error } = await supabase.auth.signUp({
-        email: data.email,
-        password: data.password,
-        options: { data: { full_name: data.name } },
-      })
-      if (error) throw error
-      toast({ title: 'Account created! 🎉', description: 'Welcome to Clarifier AI!', variant: 'success' })
-      // Navigate directly — skip email verification wall
-      if (authData?.session) {
+      if (IS_MOCK_MODE) {
+        const users = JSON.parse(localStorage.getItem('mock_supabase_users') || '[]')
+        if (users.find((u: any) => u.email === data.email)) {
+          throw new Error('Email already in use')
+        }
+        const id = crypto.randomUUID()
+        const newUser = { id, email: data.email, password: data.password, user_metadata: { full_name: data.name } }
+        localStorage.setItem('mock_supabase_users', JSON.stringify([...users, newUser]))
+        const profile = {
+          id, email: data.email, full_name: data.name,
+          xp: 0, level: 1, streak: 0, longest_streak: 0,
+          theme: 'dark', onboarding_completed: false,
+          notifications_enabled: true,
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }
+        const profiles = JSON.parse(localStorage.getItem('mock_supabase_profiles') || '[]')
+        localStorage.setItem('mock_supabase_profiles', JSON.stringify([...profiles, profile]))
+        localStorage.setItem('mock_supabase_session', JSON.stringify({ user: newUser, access_token: 'mock-token' }))
+        toast({ title: 'Account created! 🎉', description: 'Welcome to Clarifier AI!', variant: 'success' })
         navigate('/onboarding')
-      } else {
-        // No session yet (email confirmation required on Supabase side),
-        // but let them try logging in directly
-        navigate('/login', { state: { email: data.email } })
+        return
       }
+
+      const { user } = await createUserWithEmailAndPassword(auth, data.email, data.password)
+      await updateProfile(user, { displayName: data.name })
+      toast({ title: 'Account created! 🎉', description: 'Welcome to Clarifier AI!', variant: 'success' })
+      navigate('/onboarding')
     } catch (error: any) {
-      toast({ title: error.message || 'Signup failed', variant: 'error' })
+      const msg = error.message || 'Signup failed'
+      if (msg.includes('email-already-in-use')) {
+        toast({ title: 'Email already in use', description: 'Try logging in instead.', variant: 'error' })
+      } else {
+        toast({ title: msg, variant: 'error' })
+      }
     } finally {
       setLoading(false)
     }

@@ -5,7 +5,8 @@ import { BookOpen, Mail, ArrowLeft, CheckCircle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { supabase } from '@/lib/supabase'
+import { sendPasswordResetEmail } from 'firebase/auth'
+import { auth, IS_MOCK_MODE } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/useToast'
@@ -24,10 +25,14 @@ export function ForgotPasswordPage() {
   const onSubmit = async (data: { email: string }) => {
     setLoading(true)
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(data.email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+      if (IS_MOCK_MODE) {
+        // In mock mode just pretend we sent the email
+        setSent(true)
+        return
+      }
+      await sendPasswordResetEmail(auth, data.email, {
+        url: `${window.location.origin}/login`,
       })
-      if (error) throw error
       setSent(true)
     } catch (error: any) {
       toast({ title: error.message || 'Failed to send reset email', variant: 'error' })

@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { BookOpen, Lock, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { supabase } from '@/lib/supabase'
+import { confirmPasswordReset, verifyPasswordResetCode } from 'firebase/auth'
+import { auth } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/useToast'
@@ -22,44 +23,34 @@ type FormData = z.infer<typeof schema>
 
 export function ResetPasswordPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const oobCode = searchParams.get('oobCode')
+
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
-  const [sessionReady, setSessionReady] = useState(false)
-  const [sessionError, setSessionError] = useState(false)
+  const [codeValid, setCodeValid] = useState<boolean | null>(null)
 
   const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
   })
 
   useEffect(() => {
-    // Supabase sends a RECOVERY event when the user lands from the reset link
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        setSessionReady(true)
-      } else if (event === 'SIGNED_IN' && session) {
-        // Also accept SIGNED_IN from a recovery token
-        setSessionReady(true)
-      }
-    })
-
-    // If no RECOVERY event fires within 3 seconds, show an error
-    const timeout = setTimeout(() => {
-      if (!sessionReady) setSessionError(true)
-    }, 3000)
-
-    return () => {
-      subscription.unsubscribe()
-      clearTimeout(timeout)
+    if (!oobCode) {
+      setCodeValid(false)
+      return
     }
-  }, [sessionReady])
+    verifyPasswordResetCode(auth, oobCode)
+      .then(() => setCodeValid(true))
+      .catch(() => setCodeValid(false))
+  }, [oobCode])
 
   const onSubmit = async (data: FormData) => {
+    if (!oobCode) return
     setLoading(true)
     try {
-      const { error } = await supabase.auth.updateUser({ password: data.password })
-      if (error) throw error
+      await confirmPasswordReset(auth, oobCode, data.password)
       setDone(true)
       toast({ title: 'Password updated!', description: 'You can now sign in with your new password.', variant: 'success' })
       setTimeout(() => navigate('/login'), 2500)
@@ -99,7 +90,7 @@ export function ResetPasswordPage() {
               <h2 className="text-2xl font-bold mb-2">Password updated!</h2>
               <p className="text-muted-foreground">Redirecting you to login...</p>
             </div>
-          ) : sessionError ? (
+          ) : codeValid === false ? (
             <div className="text-center">
               <div className="w-16 h-16 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center mx-auto mb-4">
                 <AlertCircle className="h-8 w-8 text-destructive" />
@@ -172,9 +163,9 @@ export function ResetPasswordPage() {
                   variant="gradient"
                   className="w-full h-11 font-semibold"
                   loading={loading}
-                  disabled={!sessionReady || loading}
+                  disabled={codeValid !== true || loading}
                 >
-                  {sessionReady ? 'Update Password' : 'Verifying link...'}
+                  {codeValid === null ? 'Verifying link...' : 'Update Password'}
                 </Button>
               </form>
             </>

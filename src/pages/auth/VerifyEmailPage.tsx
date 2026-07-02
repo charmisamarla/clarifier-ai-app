@@ -2,14 +2,15 @@ import { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { BookOpen, Mail, RefreshCw, CheckCircle2, ArrowLeft } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { sendEmailVerification, onAuthStateChanged } from 'firebase/auth'
+import { auth } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/useToast'
 
 export function VerifyEmailPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const email = location.state?.email || 'your email address'
+  const email = location.state?.email || auth.currentUser?.email || 'your email address'
   const [resendLoading, setResendLoading] = useState(false)
   const [resendCooldown, setResendCooldown] = useState(0)
   const [sent, setSent] = useState(false)
@@ -19,10 +20,7 @@ export function VerifyEmailPage() {
     if (resendCooldown > 0) {
       timer = setInterval(() => {
         setResendCooldown(prev => {
-          if (prev <= 1) {
-            clearInterval(timer)
-            return 0
-          }
+          if (prev <= 1) { clearInterval(timer); return 0 }
           return prev - 1
         })
       }, 1000)
@@ -30,25 +28,23 @@ export function VerifyEmailPage() {
     return () => clearInterval(timer)
   }, [resendCooldown])
 
-  // Listen for auth state change (when user clicks the verification link in another tab)
+  // Listen for email verification in another tab
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session?.user?.email_confirmed_at) {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user?.emailVerified) {
         navigate('/onboarding')
       }
     })
-    return () => subscription.unsubscribe()
+    return () => unsubscribe()
   }, [navigate])
 
   const handleResend = async () => {
     if (resendCooldown > 0) return
     setResendLoading(true)
     try {
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: email === 'your email address' ? '' : email,
-      })
-      if (error) throw error
+      const user = auth.currentUser
+      if (!user) throw new Error('No user found. Please sign up again.')
+      await sendEmailVerification(user)
       setSent(true)
       setResendCooldown(60)
       toast({ title: 'Verification email sent!', description: 'Check your inbox.', variant: 'success' })
@@ -100,8 +96,8 @@ export function VerifyEmailPage() {
             {[
               { step: '1', text: 'Open your email inbox' },
               { step: '2', text: 'Find the email from Clarifier AI' },
-              { step: '3', text: 'Click "Confirm your email"' },
-              { step: '4', text: 'You\'ll be redirected automatically' },
+              { step: '3', text: 'Click "Verify email"' },
+              { step: '4', text: "You'll be redirected automatically" },
             ].map(({ step, text }) => (
               <div key={step} className="flex items-center gap-3 text-sm">
                 <div className="w-6 h-6 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center shrink-0">
@@ -127,9 +123,7 @@ export function VerifyEmailPage() {
             disabled={resendLoading || resendCooldown > 0}
           >
             <RefreshCw className="h-4 w-4" />
-            {resendCooldown > 0
-              ? `Resend in ${resendCooldown}s`
-              : 'Resend verification email'}
+            {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend verification email'}
           </Button>
 
           <div className="mt-4 text-center">
