@@ -35,14 +35,21 @@ export function SignupPage() {
   const onSubmit = async (data: SignupForm) => {
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signUp({
+      const { data: authData, error } = await supabase.auth.signUp({
         email: data.email,
         password: data.password,
         options: { data: { full_name: data.name } },
       })
       if (error) throw error
-      toast({ title: 'Account created! 🎉', description: 'Please check your email to verify your account.', variant: 'success' })
-      navigate('/verify-email', { state: { email: data.email } })
+      toast({ title: 'Account created! 🎉', description: 'Welcome to Clarifier AI!', variant: 'success' })
+      // Navigate directly — skip email verification wall
+      if (authData?.session) {
+        navigate('/onboarding')
+      } else {
+        // No session yet (email confirmation required on Supabase side),
+        // but let them try logging in directly
+        navigate('/login', { state: { email: data.email } })
+      }
     } catch (error: any) {
       toast({ title: error.message || 'Signup failed', variant: 'error' })
     } finally {

@@ -29,21 +29,24 @@ export function LoginPage() {
   const onSubmit = async (data: LoginForm) => {
     setLoading(true)
     try {
-      const { data: authData, error } = await supabase.auth.signInWithPassword({
+      const { error } = await supabase.auth.signInWithPassword({
         email: data.email,
         password: data.password,
       })
       if (error) throw error
-
-      // Check if email is confirmed
-      if (authData.user && !authData.user.email_confirmed_at) {
-        navigate('/verify-email', { state: { email: data.email } })
-        return
-      }
-
       navigate('/dashboard')
     } catch (error: any) {
-      toast({ title: error.message || 'Login failed', variant: 'error' })
+      // Give a friendlier message for the "Email not confirmed" error
+      const msg = error.message || 'Login failed'
+      if (msg.toLowerCase().includes('email not confirmed')) {
+        toast({
+          title: 'Email not confirmed',
+          description: 'Please check your inbox (and spam folder) for the verification link, or try signing up again.',
+          variant: 'error',
+        })
+      } else {
+        toast({ title: msg, variant: 'error' })
+      }
     } finally {
       setLoading(false)
     }
