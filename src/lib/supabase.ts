@@ -274,9 +274,38 @@ const mockAuth = {
 
   signInWithPassword: async ({ email, password }: any) => {
     const users = JSON.parse(localStorage.getItem('mock_supabase_users') || '[]');
-    const user = users.find((u: any) => u.email === email);
+    let user = users.find((u: any) => u.email === email);
+
+    // In mock mode, auto-create the user if they don't exist so any credentials work
     if (!user) {
-      return { data: { user: null, session: null }, error: { message: 'Invalid login credentials' } };
+      user = {
+        id: crypto.randomUUID(),
+        email,
+        user_metadata: { full_name: email.split('@')[0] },
+        created_at: new Date().toISOString(),
+      };
+      users.push(user);
+      localStorage.setItem('mock_supabase_users', JSON.stringify(users));
+
+      // Also create a profile for this auto-created user
+      const profiles = JSON.parse(localStorage.getItem('mock_supabase_profiles') || '[]');
+      if (!profiles.some((p: any) => p.id === user.id)) {
+        profiles.push({
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata.full_name,
+          avatar_url: null,
+          xp: 0,
+          level: 1,
+          streak: 0,
+          longest_streak: 0,
+          theme: 'dark',
+          onboarding_completed: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        localStorage.setItem('mock_supabase_profiles', JSON.stringify(profiles));
+      }
     }
 
     const session = {
