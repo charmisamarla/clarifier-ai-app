@@ -5,8 +5,7 @@ import { BookOpen, Mail, Lock, Eye, EyeOff, Sparkles } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { signInWithEmailAndPassword } from 'firebase/auth'
-import { auth, IS_MOCK_MODE } from '@/lib/firebase'
+import { supabase, IS_MOCK_MODE } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/useToast'
@@ -40,11 +39,20 @@ export function LoginPage() {
         navigate('/dashboard')
         return
       }
-      await signInWithEmailAndPassword(auth, data.email, data.password)
+      const { error } = await supabase.auth.signInWithPassword({
+        email: data.email,
+        password: data.password,
+      })
+      if (error) throw error
       navigate('/dashboard')
     } catch (error: any) {
       const msg = error.message || 'Login failed'
-      if (msg.includes('user-not-found') || msg.includes('wrong-password') || msg.includes('invalid-credential')) {
+      if (
+        msg.includes('Invalid login credentials') ||
+        msg.includes('invalid_credentials') ||
+        msg.includes('user-not-found') ||
+        msg.includes('wrong-password')
+      ) {
         toast({ title: 'Invalid email or password', variant: 'error' })
       } else {
         toast({ title: msg, variant: 'error' })

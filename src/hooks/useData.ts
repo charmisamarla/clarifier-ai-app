@@ -1,39 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  addDoc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  documentId,
-  getCountFromServer,
-} from 'firebase/firestore'
-import { db, IS_MOCK_MODE } from '@/lib/firebase'
+import { supabase, IS_MOCK_MODE } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import type { Question, QuizAttempt, Bookmark, Note, RevisionQueue, DashboardStats } from '@/types/database'
 import { calculateLevel } from '@/lib/utils'
 
-// ─── Firestore helpers ────────────────────────────────────────────────────────
+// ─── Timestamp helper ─────────────────────────────────────────────────────────
 const ts = () => new Date().toISOString()
-
-async function getCollection<T>(
-  collectionName: string,
-  userId: string,
-  extraFilters: any[] = []
-): Promise<T[]> {
-  const q = query(
-    collection(db, collectionName),
-    where('user_id', '==', userId),
-    ...extraFilters
-  )
-  const snap = await getDocs(q)
-  return snap.docs.map(d => ({ id: d.id, ...d.data() })) as T[]
-}
 
 // ─── Mock helpers (localStorage) ─────────────────────────────────────────────
 function mockGet<T>(key: string): T[] {
@@ -52,14 +24,18 @@ export function useUserSubjects() {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['user-subjects', user?.uid],
+    queryKey: ['user-subjects', user?.id],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        return mockFilter<any>('mock_user_subjects', user.uid).map(s => s.subject)
+        return mockFilter<any>('mock_user_subjects', user.id).map(s => s.subject)
       }
-      const items = await getCollection<any>('user_subjects', user.uid)
-      return items.map(s => s.subject)
+      const { data, error } = await supabase
+        .from('user_subjects')
+        .select('subject')
+        .eq('user_id', user.id)
+      if (error) throw error
+      return (data || []).map(s => s.subject)
     },
     enabled: !!user,
   })
@@ -69,11 +45,11 @@ export function useQuestions(filters?: { subject?: string; search?: string }) {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['questions', user?.uid, filters],
+    queryKey: ['questions', user?.id, filters],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        let items = mockFilter<Question>('mock_questions', user.uid)
+        let items = mockFilter<Question>('mock_questions', user.id)
         if (filters?.subject && filters.subject !== 'all') {
           items = items.filter(q => q.subject === filters.subject)
         }
@@ -83,15 +59,23 @@ export function useQuestions(filters?: { subject?: string; search?: string }) {
         }
         return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 50)
       }
-      let items = await getCollection<Question>('questions', user.uid)
+      let query = supabase
+        .from('questions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50)
       if (filters?.subject && filters.subject !== 'all') {
-        items = items.filter(q => q.subject === filters.subject)
+        query = query.eq('subject', filters.subject)
       }
+      const { data, error } = await query
+      if (error) throw error
+      let items = (data || []) as Question[]
       if (filters?.search) {
         const s = filters.search.toLowerCase()
         items = items.filter(q => q.question.toLowerCase().includes(s))
       }
-      return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 50)
+      return items
     },
     enabled: !!user,
   })
@@ -105,11 +89,16 @@ export function useQuestion(id: string) {
     queryFn: async () => {
       if (!user || !id) return null
       if (IS_MOCK_MODE) {
-        return mockFilter<Question>('mock_questions', user.uid).find(q => q.id === id) || null
+        return mockFilter<Question>('mock_questions', user.id).find(q => q.id === id) || null
       }
-      const snap = await getDoc(doc(db, 'questions', id))
-      if (!snap.exists() || snap.data()?.user_id !== user.uid) return null
-      return { id: snap.id, ...snap.data() } as Question
+      const { data, error } = await supabase
+        .from('questions')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', user.id)
+        .single()
+      if (error) return null
+      return data as Question
     },
     enabled: !!user && !!id,
   })
@@ -119,17 +108,23 @@ export function useQuizAttempts(questionId?: string) {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['quiz-attempts', user?.uid, questionId],
+    queryKey: ['quiz-attempts', user?.id, questionId],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        let items = mockFilter<QuizAttempt>('mock_quiz_attempts', user.uid)
+        let items = mockFilter<QuizAttempt>('mock_quiz_attempts', user.id)
         if (questionId) items = items.filter(a => a.question_id === questionId)
         return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       }
-      let items = await getCollection<QuizAttempt>('quiz_attempts', user.uid)
-      if (questionId) items = items.filter(a => a.question_id === questionId)
-      return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      let query = supabase
+        .from('quiz_attempts')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+      if (questionId) query = query.eq('question_id', questionId)
+      const { data, error } = await query
+      if (error) throw error
+      return (data || []) as QuizAttempt[]
     },
     enabled: !!user,
   })
@@ -139,29 +134,23 @@ export function useBookmarks() {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['bookmarks', user?.uid],
+    queryKey: ['bookmarks', user?.id],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        const bookmarks = mockFilter<any>('mock_bookmarks', user.uid)
+        const bookmarks = mockFilter<any>('mock_bookmarks', user.id)
         const questions = mockGet<Question>('mock_questions')
         return bookmarks
           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
           .map(b => ({ ...b, questions: questions.find(q => q.id === b.question_id) || null }))
       }
-      const bookmarks = await getCollection<any>('bookmarks', user.uid)
-      const sorted = bookmarks.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-
-      // Fetch related questions (batch by 10)
-      const qIds = [...new Set(sorted.map(b => b.question_id).filter(Boolean))]
-      const questionsMap: Record<string, Question> = {}
-      for (let i = 0; i < qIds.length; i += 10) {
-        const batch = qIds.slice(i, i + 10)
-        if (batch.length === 0) continue
-        const snap = await getDocs(query(collection(db, 'questions'), where(documentId(), 'in', batch)))
-        snap.docs.forEach(d => { questionsMap[d.id] = { id: d.id, ...d.data() } as Question })
-      }
-      return sorted.map(b => ({ ...b, questions: questionsMap[b.question_id] || null }))
+      const { data, error } = await supabase
+        .from('bookmarks')
+        .select('*, questions(*)')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+      if (error) throw error
+      return data || []
     },
     enabled: !!user,
   })
@@ -171,19 +160,25 @@ export function useNotes(filters?: { subject?: string; noteType?: string }) {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['notes', user?.uid, filters],
+    queryKey: ['notes', user?.id, filters],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        let items = mockFilter<Note>('mock_notes', user.uid)
+        let items = mockFilter<Note>('mock_notes', user.id)
         if (filters?.subject && filters.subject !== 'all') items = items.filter(n => n.subject === filters.subject)
         if (filters?.noteType && filters.noteType !== 'all') items = items.filter(n => n.note_type === filters.noteType)
         return items.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
       }
-      let items = await getCollection<Note>('notes', user.uid)
-      if (filters?.subject && filters.subject !== 'all') items = items.filter(n => n.subject === filters.subject)
-      if (filters?.noteType && filters.noteType !== 'all') items = items.filter(n => n.note_type === filters.noteType)
-      return items.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      let query = supabase
+        .from('notes')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('updated_at', { ascending: false })
+      if (filters?.subject && filters.subject !== 'all') query = query.eq('subject', filters.subject)
+      if (filters?.noteType && filters.noteType !== 'all') query = query.eq('note_type', filters.noteType)
+      const { data, error } = await query
+      if (error) throw error
+      return (data || []) as Note[]
     },
     enabled: !!user,
   })
@@ -193,28 +188,24 @@ export function useRevisionQueue() {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['revision-queue', user?.uid],
+    queryKey: ['revision-queue', user?.id],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        const queue = mockFilter<any>('mock_revision_queue', user.uid).filter(r => !r.completed)
+        const queue = mockFilter<any>('mock_revision_queue', user.id).filter(r => !r.completed)
         const questions = mockGet<Question>('mock_questions')
         return queue
           .sort((a, b) => b.priority - a.priority)
           .map(r => ({ ...r, questions: questions.find(q => q.id === r.question_id) || null }))
       }
-      const queue = (await getCollection<any>('revision_queue', user.uid)).filter(r => !r.completed)
-      const sorted = queue.sort((a, b) => (b.priority || 0) - (a.priority || 0))
-
-      const qIds = [...new Set(sorted.map(r => r.question_id).filter(Boolean))]
-      const questionsMap: Record<string, Question> = {}
-      for (let i = 0; i < qIds.length; i += 10) {
-        const batch = qIds.slice(i, i + 10)
-        if (batch.length === 0) continue
-        const snap = await getDocs(query(collection(db, 'questions'), where(documentId(), 'in', batch)))
-        snap.docs.forEach(d => { questionsMap[d.id] = { id: d.id, ...d.data() } as Question })
-      }
-      return sorted.map(r => ({ ...r, questions: questionsMap[r.question_id] || null }))
+      const { data, error } = await supabase
+        .from('revision_queue')
+        .select('*, questions(*)')
+        .eq('user_id', user.id)
+        .eq('completed', false)
+        .order('priority', { ascending: false })
+      if (error) throw error
+      return data || []
     },
     enabled: !!user,
   })
@@ -224,11 +215,16 @@ export function useAchievements() {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['achievements', user?.uid],
+    queryKey: ['achievements', user?.id],
     queryFn: async () => {
       if (!user) return []
-      if (IS_MOCK_MODE) return mockFilter('mock_achievements', user.uid)
-      return getCollection('achievements', user.uid)
+      if (IS_MOCK_MODE) return mockFilter('mock_achievements', user.id)
+      const { data, error } = await supabase
+        .from('achievements')
+        .select('*')
+        .eq('user_id', user.id)
+      if (error) throw error
+      return data || []
     },
     enabled: !!user,
   })
@@ -238,16 +234,22 @@ export function useXPHistory() {
   const { user } = useAuth()
 
   return useQuery({
-    queryKey: ['xp-history', user?.uid],
+    queryKey: ['xp-history', user?.id],
     queryFn: async () => {
       if (!user) return []
       if (IS_MOCK_MODE) {
-        return mockFilter<any>('mock_xp_history', user.uid)
+        return mockFilter<any>('mock_xp_history', user.id)
           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
           .slice(0, 50)
       }
-      const items = await getCollection<any>('xp_history', user.uid)
-      return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 50)
+      const { data, error } = await supabase
+        .from('xp_history')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      if (error) throw error
+      return data || []
     },
     enabled: !!user,
   })
@@ -257,7 +259,7 @@ export function useDashboardStats() {
   const { user, profile } = useAuth()
 
   return useQuery({
-    queryKey: ['dashboard-stats', user?.uid],
+    queryKey: ['dashboard-stats', user?.id],
     queryFn: async (): Promise<DashboardStats> => {
       if (!user) throw new Error('Not authenticated')
 
@@ -269,27 +271,28 @@ export function useDashboardStats() {
       let recentQuestions: Question[] = []
 
       if (IS_MOCK_MODE) {
-        questions = mockFilter<Question>('mock_questions', user.uid)
-        quizAttempts = mockFilter<any>('mock_quiz_attempts', user.uid)
-        bookmarksCount = mockFilter('mock_bookmarks', user.uid).length
-        notesCount = mockFilter('mock_notes', user.uid).length
-        revisionCount = mockFilter<any>('mock_revision_queue', user.uid).filter(r => !r.completed).length
+        questions = mockFilter<Question>('mock_questions', user.id)
+        quizAttempts = mockFilter<any>('mock_quiz_attempts', user.id)
+        bookmarksCount = mockFilter('mock_bookmarks', user.id).length
+        notesCount = mockFilter('mock_notes', user.id).length
+        revisionCount = mockFilter<any>('mock_revision_queue', user.id).filter(r => !r.completed).length
         recentQuestions = questions
           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
           .slice(0, 5)
       } else {
-        questions = await getCollection<Question>('questions', user.uid)
-        quizAttempts = await getCollection<any>('quiz_attempts', user.uid)
-
-        const [bSnap, nSnap, rSnap] = await Promise.all([
-          getCountFromServer(query(collection(db, 'bookmarks'), where('user_id', '==', user.uid))),
-          getCountFromServer(query(collection(db, 'notes'), where('user_id', '==', user.uid))),
-          getCountFromServer(query(collection(db, 'revision_queue'), where('user_id', '==', user.uid), where('completed', '==', false))),
+        const [qRes, qaRes, bRes, nRes, rRes] = await Promise.all([
+          supabase.from('questions').select('*').eq('user_id', user.id),
+          supabase.from('quiz_attempts').select('*').eq('user_id', user.id),
+          supabase.from('bookmarks').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
+          supabase.from('notes').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
+          supabase.from('revision_queue').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('completed', false),
         ])
-        bookmarksCount = bSnap.data().count
-        notesCount = nSnap.data().count
-        revisionCount = rSnap.data().count
-        recentQuestions = questions
+        questions = (qRes.data || []) as Question[]
+        quizAttempts = qaRes.data || []
+        bookmarksCount = bRes.count || 0
+        notesCount = nRes.count || 0
+        revisionCount = rRes.count || 0
+        recentQuestions = [...questions]
           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
           .slice(0, 5)
       }
@@ -364,7 +367,7 @@ export function useSaveQuestion() {
     }) => {
       if (!user) throw new Error('Not authenticated')
       const payload = {
-        user_id: user.uid,
+        user_id: user.id,
         ...data,
         follow_up_questions: data.follow_up_questions || null,
         created_at: ts(),
@@ -376,8 +379,13 @@ export function useSaveQuestion() {
         mockSet('mock_questions', [item, ...existing])
         return item as Question
       }
-      const ref = await addDoc(collection(db, 'questions'), payload)
-      return { id: ref.id, ...payload } as Question
+      const { data: inserted, error } = await supabase
+        .from('questions')
+        .insert(payload)
+        .select()
+        .single()
+      if (error) throw error
+      return inserted as Question
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['questions'] })
@@ -402,7 +410,7 @@ export function useSaveQuizAttempt() {
       strong_areas: string[]
     }) => {
       if (!user) throw new Error('Not authenticated')
-      const payload = { user_id: user.uid, ...data, created_at: ts() }
+      const payload = { user_id: user.id, ...data, created_at: ts() }
       if (IS_MOCK_MODE) {
         const id = crypto.randomUUID()
         const item = { id, ...payload }
@@ -410,8 +418,13 @@ export function useSaveQuizAttempt() {
         mockSet('mock_quiz_attempts', [item, ...existing])
         return item as QuizAttempt
       }
-      const ref = await addDoc(collection(db, 'quiz_attempts'), payload)
-      return { id: ref.id, ...payload } as QuizAttempt
+      const { data: inserted, error } = await supabase
+        .from('quiz_attempts')
+        .insert(payload)
+        .select()
+        .single()
+      if (error) throw error
+      return inserted as QuizAttempt
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['quiz-attempts'] })
@@ -429,20 +442,31 @@ export function useToggleBookmark() {
       if (!user) throw new Error('Not authenticated')
       if (IS_MOCK_MODE) {
         const all = mockGet<any>('mock_bookmarks')
-        const existing = all.find((b: any) => b.user_id === user.uid && b.question_id === questionId)
+        const existing = all.find((b: any) => b.user_id === user.id && b.question_id === questionId)
         if (existing) {
           mockSet('mock_bookmarks', all.filter((b: any) => b.id !== existing.id))
           return { action: 'removed' }
         }
-        mockSet('mock_bookmarks', [{ id: crypto.randomUUID(), user_id: user.uid, question_id: questionId, bookmark_type: type, created_at: ts() }, ...all])
+        mockSet('mock_bookmarks', [{ id: crypto.randomUUID(), user_id: user.id, question_id: questionId, bookmark_type: type, created_at: ts() }, ...all])
         return { action: 'added' }
       }
-      const existing = (await getCollection<any>('bookmarks', user.uid)).find(b => b.question_id === questionId)
+      const { data: existing } = await supabase
+        .from('bookmarks')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('question_id', questionId)
+        .single()
+
       if (existing) {
-        await deleteDoc(doc(db, 'bookmarks', existing.id))
+        await supabase.from('bookmarks').delete().eq('id', existing.id)
         return { action: 'removed' }
       }
-      await addDoc(collection(db, 'bookmarks'), { user_id: user.uid, question_id: questionId, bookmark_type: type, created_at: ts() })
+      await supabase.from('bookmarks').insert({
+        user_id: user.id,
+        question_id: questionId,
+        bookmark_type: type,
+        created_at: ts(),
+      })
       return { action: 'added' }
     },
     onSuccess: () => {
@@ -466,15 +490,20 @@ export function useSaveNote() {
     }) => {
       if (!user) throw new Error('Not authenticated')
       const now = ts()
-      const payload = { user_id: user.uid, ...data, created_at: now, updated_at: now }
+      const payload = { user_id: user.id, ...data, created_at: now, updated_at: now }
       if (IS_MOCK_MODE) {
         const id = crypto.randomUUID()
         const item = { id, ...payload }
         mockSet('mock_notes', [item, ...mockGet('mock_notes')])
         return item as Note
       }
-      const ref = await addDoc(collection(db, 'notes'), payload)
-      return { id: ref.id, ...payload } as Note
+      const { data: inserted, error } = await supabase
+        .from('notes')
+        .insert(payload)
+        .select()
+        .single()
+      if (error) throw error
+      return inserted as Note
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notes'] })
@@ -492,7 +521,8 @@ export function useDeleteNote() {
         mockSet('mock_notes', mockGet<Note>('mock_notes').filter((n: any) => n.id !== noteId))
         return
       }
-      await deleteDoc(doc(db, 'notes', noteId))
+      const { error } = await supabase.from('notes').delete().eq('id', noteId)
+      if (error) throw error
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notes'] })
@@ -509,20 +539,31 @@ export function useAddToRevisionQueue() {
       if (!user) throw new Error('Not authenticated')
       if (IS_MOCK_MODE) {
         const all = mockGet<any>('mock_revision_queue')
-        const existing = all.find((r: any) => r.user_id === user.uid && r.question_id === questionId)
+        const existing = all.find((r: any) => r.user_id === user.id && r.question_id === questionId)
         if (existing) {
           mockSet('mock_revision_queue', all.map((r: any) => r.id === existing.id ? { ...r, priority, completed: false } : r))
         } else {
-          mockSet('mock_revision_queue', [...all, { id: crypto.randomUUID(), user_id: user.uid, question_id: questionId, priority, completed: false, created_at: ts() }])
+          mockSet('mock_revision_queue', [...all, { id: crypto.randomUUID(), user_id: user.id, question_id: questionId, priority, completed: false, created_at: ts() }])
         }
         return
       }
-      // Check if already exists
-      const existing = (await getCollection<any>('revision_queue', user.uid)).find(r => r.question_id === questionId)
+      const { data: existing } = await supabase
+        .from('revision_queue')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('question_id', questionId)
+        .single()
+
       if (existing) {
-        await updateDoc(doc(db, 'revision_queue', existing.id), { priority, completed: false })
+        await supabase.from('revision_queue').update({ priority, completed: false }).eq('id', existing.id)
       } else {
-        await addDoc(collection(db, 'revision_queue'), { user_id: user.uid, question_id: questionId, priority, completed: false, created_at: ts() })
+        await supabase.from('revision_queue').insert({
+          user_id: user.id,
+          question_id: questionId,
+          priority,
+          completed: false,
+          created_at: ts(),
+        })
       }
     },
     onSuccess: () => {
@@ -540,24 +581,31 @@ export function useAwardXP() {
     mutationFn: async ({ action, amount, description }: { action: string; amount: number; description?: string }) => {
       if (!user) throw new Error('Not authenticated')
       if (IS_MOCK_MODE) {
-        // Update mock XP
         const profiles = mockGet<any>('mock_supabase_profiles')
         const newXP = (profile?.xp || 0) + amount
         const levelData = calculateLevel(newXP)
         mockSet('mock_supabase_profiles', profiles.map((p: any) =>
-          p.id === user.uid ? { ...p, xp: newXP, level: levelData.level } : p
+          p.id === user.id ? { ...p, xp: newXP, level: levelData.level } : p
         ))
         mockSet('mock_xp_history', [
-          { id: crypto.randomUUID(), user_id: user.uid, xp_amount: amount, action, description, created_at: ts() },
+          { id: crypto.randomUUID(), user_id: user.id, xp_amount: amount, action, description, created_at: ts() },
           ...mockGet('mock_xp_history'),
         ])
         return
       }
-      await addDoc(collection(db, 'xp_history'), { user_id: user.uid, xp_amount: amount, action, description: description || null, created_at: ts() })
-      const profileSnap = await getDoc(doc(db, 'profiles', user.uid))
-      const newXP = ((profileSnap.data()?.xp) || 0) + amount
+      await supabase.from('xp_history').insert({
+        user_id: user.id,
+        xp_amount: amount,
+        action,
+        description: description || null,
+        created_at: ts(),
+      })
+      const newXP = (profile?.xp || 0) + amount
       const levelData = calculateLevel(newXP)
-      await updateDoc(doc(db, 'profiles', user.uid), { xp: newXP, level: levelData.level, last_active: ts() })
+      await supabase
+        .from('profiles')
+        .update({ xp: newXP, level: levelData.level, last_active: ts() })
+        .eq('id', user.id)
     },
     onSuccess: () => {
       refreshProfile()
@@ -575,15 +623,17 @@ export function useUpdateSubjects() {
     mutationFn: async (subjects: string[]) => {
       if (!user) throw new Error('Not authenticated')
       if (IS_MOCK_MODE) {
-        const all = mockGet<any>('mock_user_subjects').filter((s: any) => s.user_id !== user.uid)
-        mockSet('mock_user_subjects', [...all, ...subjects.map(subject => ({ id: crypto.randomUUID(), user_id: user.uid, subject, created_at: ts() }))])
+        const all = mockGet<any>('mock_user_subjects').filter((s: any) => s.user_id !== user.id)
+        mockSet('mock_user_subjects', [...all, ...subjects.map(subject => ({ id: crypto.randomUUID(), user_id: user.id, subject, created_at: ts() }))])
         return
       }
-      // Delete existing
-      const existing = await getCollection<any>('user_subjects', user.uid)
-      await Promise.all(existing.map(s => deleteDoc(doc(db, 'user_subjects', s.id))))
-      // Insert new
-      await Promise.all(subjects.map(subject => addDoc(collection(db, 'user_subjects'), { user_id: user.uid, subject, created_at: ts() })))
+      // Delete existing then insert new
+      await supabase.from('user_subjects').delete().eq('user_id', user.id)
+      if (subjects.length > 0) {
+        await supabase.from('user_subjects').insert(
+          subjects.map(subject => ({ user_id: user.id, subject, created_at: ts() }))
+        )
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-subjects'] })
@@ -607,10 +657,14 @@ export function useUpdateProfile() {
       const payload = { ...updates, updated_at: ts() }
       if (IS_MOCK_MODE) {
         const profiles = mockGet<any>('mock_supabase_profiles')
-        mockSet('mock_supabase_profiles', profiles.map((p: any) => p.id === user.uid ? { ...p, ...payload } : p))
+        mockSet('mock_supabase_profiles', profiles.map((p: any) => p.id === user.id ? { ...p, ...payload } : p))
         return
       }
-      await updateDoc(doc(db, 'profiles', user.uid), payload)
+      const { error } = await supabase
+        .from('profiles')
+        .update(payload)
+        .eq('id', user.id)
+      if (error) throw error
     },
     onSuccess: () => {
       refreshProfile()

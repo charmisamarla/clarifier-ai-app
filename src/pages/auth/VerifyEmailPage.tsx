@@ -2,18 +2,24 @@ import { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { BookOpen, Mail, RefreshCw, CheckCircle2, ArrowLeft } from 'lucide-react'
-import { sendEmailVerification, onAuthStateChanged } from 'firebase/auth'
-import { auth } from '@/lib/firebase'
+import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/useToast'
 
 export function VerifyEmailPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const email = location.state?.email || auth.currentUser?.email || 'your email address'
+  const [email, setEmail] = useState(location.state?.email || 'your email address')
   const [resendLoading, setResendLoading] = useState(false)
   const [resendCooldown, setResendCooldown] = useState(0)
   const [sent, setSent] = useState(false)
+
+  useEffect(() => {
+    // Get current user email if available
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user?.email) setEmail(user.email)
+    })
+  }, [])
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval>
@@ -28,23 +34,27 @@ export function VerifyEmailPage() {
     return () => clearInterval(timer)
   }, [resendCooldown])
 
-  // Listen for email verification in another tab
+  // Listen for email confirmation
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user?.emailVerified) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN') {
         navigate('/onboarding')
       }
     })
-    return () => unsubscribe()
+    return () => subscription.unsubscribe()
   }, [navigate])
 
   const handleResend = async () => {
     if (resendCooldown > 0) return
     setResendLoading(true)
     try {
-      const user = auth.currentUser
-      if (!user) throw new Error('No user found. Please sign up again.')
-      await sendEmailVerification(user)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user?.email) throw new Error('No user found. Please sign up again.')
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: user.email,
+      })
+      if (error) throw error
       setSent(true)
       setResendCooldown(60)
       toast({ title: 'Verification email sent!', description: 'Check your inbox.', variant: 'success' })

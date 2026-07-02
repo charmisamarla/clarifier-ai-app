@@ -5,8 +5,7 @@ import { BookOpen, Mail, Lock, Eye, EyeOff, User, Sparkles } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
-import { auth, IS_MOCK_MODE } from '@/lib/firebase'
+import { supabase, IS_MOCK_MODE } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/useToast'
@@ -59,13 +58,19 @@ export function SignupPage() {
         return
       }
 
-      const { user } = await createUserWithEmailAndPassword(auth, data.email, data.password)
-      await updateProfile(user, { displayName: data.name })
+      const { error } = await supabase.auth.signUp({
+        email: data.email,
+        password: data.password,
+        options: {
+          data: { full_name: data.name },
+        },
+      })
+      if (error) throw error
       toast({ title: 'Account created! 🎉', description: 'Welcome to Clarifier AI!', variant: 'success' })
       navigate('/onboarding')
     } catch (error: any) {
       const msg = error.message || 'Signup failed'
-      if (msg.includes('email-already-in-use')) {
+      if (msg.includes('already registered') || msg.includes('email-already-in-use') || msg.includes('User already registered')) {
         toast({ title: 'Email already in use', description: 'Try logging in instead.', variant: 'error' })
       } else {
         toast({ title: msg, variant: 'error' })

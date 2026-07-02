@@ -1,6 +1,6 @@
-// ─── Firestore entity types ───────────────────────────────────────────────────
-// These match the Firestore document structure for each collection.
-// The `id` field is the Firestore document ID (same as Firebase Auth uid for profiles).
+// ─── Supabase entity types ────────────────────────────────────────────────────
+// These match the Supabase table structure for each collection.
+// The `id` field is the Supabase row id (same as auth.uid for profiles).
 
 export interface Profile {
   id: string

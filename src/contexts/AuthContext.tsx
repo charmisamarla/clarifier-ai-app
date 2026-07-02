@@ -1,11 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import {
-  onAuthStateChanged,
-  signOut as firebaseSignOut,
-  User,
-} from 'firebase/auth'
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore'
-import { auth, db, IS_MOCK_MODE } from '@/lib/firebase'
+import type { User } from '@supabase/supabase-js'
+import { supabase, IS_MOCK_MODE } from '@/lib/supabase'
 import type { Profile } from '@/types/database'
 
 interface AuthContextType {
@@ -25,13 +20,18 @@ const AuthContext = createContext<AuthContextType>({
 })
 
 // ─── Profile helpers ──────────────────────────────────────────────────────────
-async function fetchProfileFromFirestore(userId: string): Promise<Profile | null> {
+async function fetchProfileFromSupabase(userId: string): Promise<Profile | null> {
   try {
-    const snap = await getDoc(doc(db, 'profiles', userId))
-    if (snap.exists()) {
-      return { id: snap.id, ...snap.data() } as Profile
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single()
+    if (error) {
+      console.error('Error fetching profile:', error)
+      return null
     }
-    return null
+    return data as Profile
   } catch (error) {
     console.error('Error fetching profile:', error)
     return null
@@ -40,35 +40,45 @@ async function fetchProfileFromFirestore(userId: string): Promise<Profile | null
 
 async function createOrUpdateProfile(user: User) {
   try {
-    const profileRef = doc(db, 'profiles', user.uid)
-    const snap = await getDoc(profileRef)
+    const { data: existing } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', user.id)
+      .single()
 
-    if (!snap.exists()) {
+    const now = new Date().toISOString()
+    const fullName = user.user_metadata?.full_name || user.user_metadata?.name || null
+    const avatarUrl = user.user_metadata?.avatar_url || null
+
+    if (!existing) {
       // First login — create profile
-      await setDoc(profileRef, {
-        id: user.uid,
+      await supabase.from('profiles').insert({
+        id: user.id,
         email: user.email || '',
-        full_name: user.displayName || null,
-        avatar_url: user.photoURL || null,
+        full_name: fullName,
+        avatar_url: avatarUrl,
         xp: 0,
         level: 1,
         streak: 0,
         longest_streak: 0,
-        last_active: new Date().toISOString(),
+        last_active: now,
         theme: 'dark',
         onboarding_completed: false,
         notifications_enabled: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as Profile)
-    } else {
-      await updateDoc(profileRef, {
-        email: user.email || snap.data()?.email || '',
-        full_name: user.displayName || snap.data()?.full_name || null,
-        avatar_url: user.photoURL || snap.data()?.avatar_url || null,
-        last_active: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: now,
+        updated_at: now,
       })
+    } else {
+      await supabase
+        .from('profiles')
+        .update({
+          email: user.email || '',
+          full_name: fullName,
+          avatar_url: avatarUrl,
+          last_active: now,
+          updated_at: now,
+        })
+        .eq('id', user.id)
     }
   } catch (error) {
     console.error('Error creating/updating profile:', error)
@@ -88,24 +98,7 @@ function getMockUser(): User | null {
   try {
     const session = JSON.parse(localStorage.getItem('mock_supabase_session') || 'null')
     if (!session?.user) return null
-    return {
-      uid: session.user.id,
-      email: session.user.email,
-      displayName: session.user.user_metadata?.full_name || null,
-      photoURL: session.user.user_metadata?.avatar_url || null,
-      emailVerified: true,
-      metadata: {},
-      providerData: [],
-      refreshToken: 'mock-token',
-      tenantId: null,
-      delete: async () => {},
-      getIdToken: async () => 'mock-token',
-      getIdTokenResult: async () => ({} as any),
-      reload: async () => {},
-      toJSON: () => ({}),
-      isAnonymous: false,
-      providerId: 'password',
-    } as unknown as User
+    return session.user as User
   } catch {
     return null
   }
@@ -131,21 +124,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (IS_MOCK_MODE) {
       p = getMockProfile(userId)
     } else {
-      p = await fetchProfileFromFirestore(userId)
+      p = await fetchProfileFromSupabase(userId)
     }
     setProfile(p)
     applyTheme(p?.theme)
   }
 
   const refreshProfile = async () => {
-    if (user) await fetchProfile(user.uid)
+    if (user) await fetchProfile(user.id)
   }
 
   const signOut = async () => {
     if (IS_MOCK_MODE) {
       localStorage.removeItem('mock_supabase_session')
     } else {
-      await firebaseSignOut(auth)
+      await supabase.auth.signOut()
     }
     setUser(null)
     setProfile(null)
@@ -155,23 +148,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (IS_MOCK_MODE) {
       const mockUser = getMockUser()
       setUser(mockUser)
-      if (mockUser) fetchProfile(mockUser.uid)
+      if (mockUser) fetchProfile(mockUser.id)
       setLoading(false)
       return
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser)
-      if (firebaseUser) {
-        await createOrUpdateProfile(firebaseUser)
-        await fetchProfile(firebaseUser.uid)
+    // Get initial session
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      const supabaseUser = session?.user ?? null
+      setUser(supabaseUser)
+      if (supabaseUser) {
+        await createOrUpdateProfile(supabaseUser)
+        await fetchProfile(supabaseUser.id)
+      }
+      setLoading(false)
+    })
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const supabaseUser = session?.user ?? null
+      setUser(supabaseUser)
+      if (supabaseUser) {
+        await createOrUpdateProfile(supabaseUser)
+        await fetchProfile(supabaseUser.id)
       } else {
         setProfile(null)
       }
       setLoading(false)
     })
 
-    return () => unsubscribe()
+    return () => subscription.unsubscribe()
   }, [])
 
   return (

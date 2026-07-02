@@ -7,8 +7,7 @@ import { getSubjectIcon, getSubjectColor, formatRelativeTime } from '@/lib/utils
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/useToast'
-import { doc, updateDoc } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { supabase } from '@/lib/supabase'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -40,11 +39,11 @@ export function RevisionPage() {
     try {
       // If remembered well, mark as completed
       if (remembered) {
-        await updateDoc(doc(db, 'revision_queue', currentItem.id), { completed: true })
+        await supabase.from('revision_queue').update({ completed: true }).eq('id', currentItem.id)
       } else {
-        await updateDoc(doc(db, 'revision_queue', currentItem.id), {
+        await supabase.from('revision_queue').update({
           priority: Math.max(1, (currentItem.priority || 1) - 1),
-        })
+        }).eq('id', currentItem.id)
       }
       
       // Move to next
