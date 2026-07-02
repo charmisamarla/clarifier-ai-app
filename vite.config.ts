@@ -14,4 +14,9 @@ export default defineConfig({
     port: 5173,
     host: true,
   },
+  preview: {
+    port: 10000,
+    host: true,
+    allowedHosts: ['clarifier-ai-app.onrender.com', 'all'],
+  },
 })
