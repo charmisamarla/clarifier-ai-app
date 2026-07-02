@@ -359,6 +359,11 @@ const mockAuth = {
     return { data: { provider, url: '#' }, error: null };
   },
 
+  resend: async ({ type, email }: { type: string; email: string }) => {
+    // Mock resend — no real email is sent in mock mode, just return success
+    return { data: {}, error: null };
+  },
+
   signOut: async () => {
     localStorage.removeItem('mock_supabase_session');
     setTimeout(() => {
